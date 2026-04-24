@@ -4,13 +4,26 @@ After=network.target
 
 [Service]
 Type=simple
-User=root
+User=omber
+Group=omber
 WorkingDirectory=/opt/ombers/ombers-communicator
 ExecStart=/usr/bin/node index.js
 Restart=on-failure
 RestartSec=5
 Environment=MACHINE_PORT=8081
 Environment=PHONE_PORT=8080
+EnvironmentFile=-/etc/ombers/ombers-communicator.env
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/ombers/ombers-communicator
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
 
 [Install]
 WantedBy=multi-user.target

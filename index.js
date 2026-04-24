@@ -8,7 +8,8 @@
  * Multiplex: `/ws/<sessionKey>` — Phone and Machine sharing the same sessionKey are bridged.
  * Legacy (single pair): path is only `/ws` or `/ws/`, one Phone and one Machine for the whole instance.
  *
- * HTTP: `GET /health` (always), optional `GET /metrics` when ENABLE_METRICS=true.
+ * HTTP: `GET /health` (always), optional `GET /metrics` when ENABLE_METRICS=true,
+ * optional `GET /relay-peers` when OMBERS_EXPOSE_RELAY_PEERS=1 (JSON: open WS remote IPs for this port).
  */
 import http from 'http';
 import { WebSocketServer } from 'ws';
@@ -20,7 +21,16 @@ import {
   metricsEnabled,
   metricsText,
   recordRelay,
+  recordRelayError,
+  recordUpgradeReject,
 } from './lib/metrics.js';
+import {
+  createFixedWindowRateLimiter,
+  getAuthToken,
+  isIpAllowed,
+  isTokenAuthorized,
+  readSecurityConfig,
+} from './lib/security.js';
 
 const log = createLogger();
 
@@ -35,6 +45,34 @@ const WS_MAX_PAYLOAD_BYTES =
 
 const MAX_TOTAL_CONNECTIONS =
   Number(process.env.MAX_TOTAL_CONNECTIONS) > 0 ? Number(process.env.MAX_TOTAL_CONNECTIONS) : 0;
+const security = readSecurityConfig(process.env);
+const upgradeLimiter = createFixedWindowRateLimiter(security.wsUpgradeRateLimitPerMin, 60_000);
+
+function envBool(name) {
+  const v = process.env[name];
+  return v === '1' || String(v).toLowerCase() === 'true';
+}
+
+/** When true, `GET /relay-peers` returns JSON of open WebSocket remote addresses for this listener (PHONE or MACHINE). */
+const EXPOSE_RELAY_PEERS = envBool('OMBERS_EXPOSE_RELAY_PEERS');
+
+function normalizePeerIp(addr) {
+  if (!addr || typeof addr !== 'string') return null;
+  if (addr.startsWith('::ffff:')) return addr.slice(7);
+  return addr;
+}
+
+function collectPeerAddresses(wss) {
+  const out = [];
+  for (const ws of wss.clients) {
+    const sock = ws.socket || ws._socket;
+    const raw = sock?.remoteAddress;
+    if (!raw) continue;
+    const n = normalizePeerIp(raw);
+    if (n) out.push(n);
+  }
+  return [...new Set(out)];
+}
 
 /** @type {Array<{ server: import('http').Server, wss: import('ws').WebSocketServer, label: string, port: number }>} */
 const instances = [];
@@ -92,6 +130,7 @@ function bindPhone(sessionKey, ws) {
         peer.send(data);
         recordRelay('phone_to_machine');
       } catch (e) {
+        recordRelayError('phone_to_machine');
         log.error('Phone->Machine relay error', { err: e.message });
       }
     }
@@ -136,6 +175,7 @@ function bindMachine(sessionKey, ws) {
         peer.send(data);
         recordRelay('machine_to_phone');
       } catch (e) {
+        recordRelayError('machine_to_phone');
         log.error('Machine->Phone relay error', { err: e.message });
       }
     }
@@ -164,51 +204,99 @@ function rejectUpgrade503(socket, body) {
   socket.destroy();
 }
 
-function handlePlainHttp(req, res) {
-  const host = req.headers.host || 'localhost';
-  let pathname;
-  try {
-    pathname = new URL(req.url || '/', `http://${host}`).pathname;
-  } catch {
-    res.writeHead(400);
-    res.end();
-    return;
-  }
+function rejectUpgrade401(socket, body) {
+  const b = Buffer.from(body, 'utf8');
+  socket.write(
+    `HTTP/1.1 401 Unauthorized\r\nContent-Type: text/plain; charset=utf-8\r\nConnection: close\r\nContent-Length: ${b.length}\r\n\r\n`,
+  );
+  socket.write(b);
+  socket.destroy();
+}
 
-  if (req.method === 'GET' && (pathname === '/health' || pathname === '/health/')) {
-    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify({ status: 'ok', service: 'ombers-communicator' }));
-    return;
-  }
+function rejectUpgrade403(socket, body) {
+  const b = Buffer.from(body, 'utf8');
+  socket.write(
+    `HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain; charset=utf-8\r\nConnection: close\r\nContent-Length: ${b.length}\r\n\r\n`,
+  );
+  socket.write(b);
+  socket.destroy();
+}
 
-  if (req.method === 'GET' && (pathname === '/metrics' || pathname === '/metrics/')) {
-    if (!metricsEnabled()) {
-      res.writeHead(404);
+function createPlainHttpHandler(wss, side) {
+  return function handlePlainHttp(req, res) {
+    const host = req.headers.host || 'localhost';
+    let pathname;
+    let urlObj;
+    try {
+      urlObj = new URL(req.url || '/', `http://${host}`);
+      pathname = urlObj.pathname;
+    } catch {
+      res.writeHead(400);
       res.end();
       return;
     }
-    void metricsText().then(
-      (text) => {
-        res.writeHead(200, { 'Content-Type': getMetricsContentType() });
-        res.end(text);
-      },
-      (err) => {
-        log.error('metrics export failed', { err: String(err) });
-        res.writeHead(500);
-        res.end();
-      },
-    );
-    return;
-  }
 
-  res.writeHead(404);
-  res.end();
+    if (req.method === 'GET' && (pathname === '/relay-peers' || pathname === '/relay-peers/')) {
+      if (!EXPOSE_RELAY_PEERS) {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      if (security.requireAuthToken) {
+        const token = getAuthToken(req.headers, urlObj);
+        if (!isTokenAuthorized(security.expectedToken, token)) {
+          res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ error: 'unauthorized', service: 'ombers-communicator' }));
+          return;
+        }
+      }
+      const peers = collectPeerAddresses(wss);
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(
+        JSON.stringify({
+          status: 'ok',
+          side,
+          peers,
+          service: 'ombers-communicator',
+        }),
+      );
+      return;
+    }
+
+    if (req.method === 'GET' && (pathname === '/health' || pathname === '/health/')) {
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ status: 'ok', service: 'ombers-communicator' }));
+      return;
+    }
+
+    if (req.method === 'GET' && (pathname === '/metrics' || pathname === '/metrics/')) {
+      if (!metricsEnabled()) {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      void metricsText().then(
+        (text) => {
+          res.writeHead(200, { 'Content-Type': getMetricsContentType() });
+          res.end(text);
+        },
+        (err) => {
+          log.error('metrics export failed', { err: String(err) });
+          res.writeHead(500);
+          res.end();
+        },
+      );
+      return;
+    }
+
+    res.writeHead(404);
+    res.end();
+  };
 }
 
 function attachUpgradeServer(port, label, side) {
-  const server = http.createServer(handlePlainHttp);
-
   const wss = new WebSocketServer({ noServer: true, maxPayload: WS_MAX_PAYLOAD_BYTES });
+  const server = http.createServer(createPlainHttpHandler(wss, side));
 
   server.on('upgrade', (req, socket, head) => {
     if (shuttingDown) {
@@ -216,8 +304,24 @@ function attachUpgradeServer(port, label, side) {
       return;
     }
 
+    const remoteIp = req.socket.remoteAddress || 'unknown';
+    if (!isIpAllowed(remoteIp, security.ipAllowlist)) {
+      recordUpgradeReject('ip_not_allowed');
+      log.warn('rejecting WebSocket upgrade: ip not allowed', { ip: remoteIp });
+      rejectUpgrade403(socket, 'Forbidden');
+      return;
+    }
+
+    if (!upgradeLimiter.allow(remoteIp)) {
+      recordUpgradeReject('rate_limit');
+      log.warn('rejecting WebSocket upgrade: rate limit', { ip: remoteIp });
+      rejectUpgrade503(socket, 'Too many upgrade requests');
+      return;
+    }
+
     if (MAX_TOTAL_CONNECTIONS > 0 && totalConnections() >= MAX_TOTAL_CONNECTIONS) {
       log.warn('rejecting WebSocket upgrade: connection limit', { limit: MAX_TOTAL_CONNECTIONS });
+      recordUpgradeReject('capacity');
       rejectUpgrade503(socket, 'Too many connections');
       return;
     }
@@ -233,8 +337,19 @@ function attachUpgradeServer(port, label, side) {
 
     const sessionKey = parseSessionPath(url.pathname);
     if (sessionKey === null) {
+      recordUpgradeReject('invalid_path');
       socket.destroy();
       return;
+    }
+
+    if (security.requireAuthToken) {
+      const token = getAuthToken(req.headers, url);
+      if (!isTokenAuthorized(security.expectedToken, token)) {
+        recordUpgradeReject('auth_failed');
+        log.warn('rejecting WebSocket upgrade: auth failed', { side, ip: remoteIp });
+        rejectUpgrade401(socket, 'auth_failed');
+        return;
+      }
     }
 
     wss.handleUpgrade(req, socket, head, (ws) => {
@@ -244,8 +359,9 @@ function attachUpgradeServer(port, label, side) {
   });
 
   server.listen(port, '0.0.0.0', () => {
+    const extra = EXPOSE_RELAY_PEERS ? ', /relay-peers' : '';
     log.info(
-      `Middleware: ${label} listening on 0.0.0.0:${port} (GET /health${metricsEnabled() ? ', /metrics' : ''}, /ws legacy, /ws/<sessionKey> multiplex)`,
+      `Middleware: ${label} listening on 0.0.0.0:${port} (GET /health${metricsEnabled() ? ', /metrics' : ''}${extra}, /ws legacy, /ws/<sessionKey> multiplex)`,
     );
   });
 

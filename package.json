@@ -1,15 +1,18 @@
 {
   "name": "ombers-communicator",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Ombers Communicator: WebSocket relay between OpenClaw Machine and Phone.",
   "main": "index.js",
   "type": "module",
   "scripts": {
     "start": "node index.js",
     "dev": "node --watch index.js",
+    "lint": "node --check index.js lib/*.js test/*.js tools/*.mjs",
     "test": "node --test test/*.test.js && node tools/test-two-tunnels.mjs",
     "test:unit": "node --test test/*.test.js",
-    "test-multipair": "node tools/test-two-tunnels.mjs"
+    "test-multipair": "node tools/test-two-tunnels.mjs",
+    "security:audit": "npm audit --audit-level=high",
+    "ci:gate": "npm run lint && npm run test && npm run security:audit"
   },
   "engines": {
     "node": ">=18"

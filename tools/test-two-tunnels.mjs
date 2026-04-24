@@ -1,5 +1,5 @@
 /**
- * Short test: two sessionKeys connected concurrently; messages must not cross tunnels.
+ * Multipair test: N sessionKeys connected concurrently; messages must not cross tunnels.
  * Requires `npm install` first. Run: node tools/test-two-tunnels.mjs
  */
 import { spawn } from 'child_process';
@@ -11,6 +11,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = join(__dirname, '..');
 const PHONE_PORT = 38080;
 const MACHINE_PORT = 38081;
+const TUNNELS = Math.max(16, Number(process.env.TEST_TUNNELS || 16));
 
 function waitOpen(ws) {
   return new Promise((resolve, reject) => {
@@ -38,36 +39,37 @@ const child = spawn(process.execPath, ['index.js'], {
 await new Promise((r) => setTimeout(r, 400));
 
 try {
-  const keyA = 'tunnel-a-test-key';
-  const keyB = 'tunnel-b-test-key';
+  const pairs = [];
+  for (let i = 0; i < TUNNELS; i++) {
+    const key = `tunnel-${i}-test-key`;
+    const phone = new WebSocket(`ws://127.0.0.1:${PHONE_PORT}/ws/${encodeURIComponent(key)}`);
+    const machine = new WebSocket(`ws://127.0.0.1:${MACHINE_PORT}/ws/${encodeURIComponent(key)}`);
+    pairs.push({ key, phone, machine });
+  }
 
-  const pA = new WebSocket(`ws://127.0.0.1:${PHONE_PORT}/ws/${encodeURIComponent(keyA)}`);
-  const mA = new WebSocket(`ws://127.0.0.1:${MACHINE_PORT}/ws/${encodeURIComponent(keyA)}`);
-  const pB = new WebSocket(`ws://127.0.0.1:${PHONE_PORT}/ws/${encodeURIComponent(keyB)}`);
-  const mB = new WebSocket(`ws://127.0.0.1:${MACHINE_PORT}/ws/${encodeURIComponent(keyB)}`);
+  await Promise.all(pairs.flatMap((x) => [waitOpen(x.phone), waitOpen(x.machine)]));
 
-  await Promise.all([waitOpen(pA), waitOpen(mA), waitOpen(pB), waitOpen(mB)]);
+  for (let i = 0; i < pairs.length; i++) {
+    const msg = `ping-${i}`;
+    const got = waitMsg(pairs[i].machine);
+    pairs[i].phone.send(msg);
+    const echoed = await got;
+    if (echoed !== msg) throw new Error(`tunnel ${i} expected ${msg} got ${echoed}`);
+  }
 
-  const gotA = waitMsg(mA);
-  pA.send('ping-A');
-  const ra = await gotA;
-  if (ra !== 'ping-A') throw new Error(`A expected ping-A got ${ra}`);
+  for (let i = 0; i < pairs.length; i++) {
+    const msg = `from-machine-${i}`;
+    const got = waitMsg(pairs[i].phone);
+    pairs[i].machine.send(msg);
+    const echoed = await got;
+    if (echoed !== msg) throw new Error(`reverse tunnel ${i} expected ${msg} got ${echoed}`);
+  }
 
-  const gotB = waitMsg(mB);
-  pB.send('ping-B');
-  const rb = await gotB;
-  if (rb !== 'ping-B') throw new Error(`B expected ping-B got ${rb}`);
-
-  const gotRev = waitMsg(pB);
-  mB.send('from-machine-B');
-  const rev = await gotRev;
-  if (rev !== 'from-machine-B') throw new Error(`reverse B failed: ${rev}`);
-
-  pA.close();
-  mA.close();
-  pB.close();
-  mB.close();
-  console.log('middleware multipair OK');
+  for (const { phone, machine } of pairs) {
+    phone.close();
+    machine.close();
+  }
+  console.log(`middleware multipair OK tunnels=${TUNNELS}`);
 } catch (e) {
   console.error(e);
   process.exitCode = 1;
