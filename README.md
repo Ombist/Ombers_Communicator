@@ -104,6 +104,9 @@ If you publish **only** this folder as its own repository, copy that workflow to
 | `LOG_FORMAT` | _(unset)_ | Set to `json` for one JSON object per line (`ts`, `level`, `msg`, …) |
 | `ENABLE_METRICS` or `METRICS_ENABLED` | _(off)_ | Set to `1` or `true` to expose Prometheus text on `GET /metrics` |
 | `OMBERS_EXPOSE_RELAY_PEERS` | _(off)_ | Set to `1` or `true` to expose `GET /relay-peers` on **each** listener (PHONE and MACHINE ports): JSON `{ status, side, peers }` listing **remote** TCP addresses of open WebSockets on that port. When token auth is required for upgrades, the same `Authorization: Bearer` (or `?token=`) must be sent. Intended for operators (e.g. Ombist iOS team relay screen); do not expose on untrusted networks without TLS/proxy controls. |
+| `OMBERS_USE_TLS` | _(off)_ | Set to `1` or `true` to enable native TLS on both listeners (`wss://` + `https://`) |
+| `OMBERS_TLS_CERT_PATH` | _(required when TLS on)_ | Certificate PEM path used by Node `https.createServer()` |
+| `OMBERS_TLS_KEY_PATH` | _(required when TLS on)_ | Private key PEM path used by Node `https.createServer()` |
 | `WS_MAX_PAYLOAD_BYTES` | `104857600` | Max WebSocket message size (100 MiB) |
 | `MAX_TOTAL_CONNECTIONS` | `0` | If &gt; `0`, refuse new WebSocket upgrades with HTTP **503** when total connections ≥ this value |
 | `OMBERS_AUTH_TOKEN` | _(unset)_ | When set, enables token check on WebSocket upgrade (Bearer token or `?token=`) |
@@ -113,9 +116,9 @@ If you publish **only** this folder as its own repository, copy that workflow to
 
 ## Health check
 
-On **both** ports, plain HTTP (not WebSocket):
+On **both** ports, probe over HTTP(S) (not WebSocket):
 
-- `GET /health` → `200` and `{"status":"ok","service":"ombers-communicator"}`
+- `GET /health` → `200` and `{"status":"ok","service":"ombers-communicator"}` (`http://` when TLS off, `https://` when TLS on)
 
 When `OMBERS_EXPOSE_RELAY_PEERS=1`, **both** ports also serve:
 

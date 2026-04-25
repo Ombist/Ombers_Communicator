@@ -8,10 +8,13 @@
  * Multiplex: `/ws/<sessionKey>` — Phone and Machine sharing the same sessionKey are bridged.
  * Legacy (single pair): path is only `/ws` or `/ws/`, one Phone and one Machine for the whole instance.
  *
- * HTTP: `GET /health` (always), optional `GET /metrics` when ENABLE_METRICS=true,
+ * Plain HTTP or **HTTPS** (when `OMBERS_USE_TLS=1` + cert paths): `GET /health` (always),
+ * optional `GET /metrics` when ENABLE_METRICS=true,
  * optional `GET /relay-peers` when OMBERS_EXPOSE_RELAY_PEERS=1 (JSON: open WS remote IPs for this port).
  */
+import fs from 'fs';
 import http from 'http';
+import https from 'https';
 import { WebSocketServer } from 'ws';
 import { createLogger } from './lib/log.js';
 import { parseSessionPath } from './lib/parseSessionPath.js';
@@ -57,6 +60,28 @@ function envBool(name) {
 
 /** When true, `GET /relay-peers` returns JSON of open WebSocket remote addresses for this listener (PHONE or MACHINE). */
 const EXPOSE_RELAY_PEERS = envBool('OMBERS_EXPOSE_RELAY_PEERS');
+
+/** When set with cert/key paths, both listeners use TLS (WSS + HTTPS /health). */
+function loadTlsOptions() {
+  if (!envBool('OMBERS_USE_TLS')) return null;
+  const certPath = String(process.env.OMBERS_TLS_CERT_PATH || '').trim();
+  const keyPath = String(process.env.OMBERS_TLS_KEY_PATH || '').trim();
+  if (!certPath || !keyPath) {
+    log.error('OMBERS_USE_TLS=1 requires OMBERS_TLS_CERT_PATH and OMBERS_TLS_KEY_PATH');
+    process.exit(1);
+  }
+  try {
+    return {
+      cert: fs.readFileSync(certPath),
+      key: fs.readFileSync(keyPath),
+    };
+  } catch (e) {
+    log.error('failed to read TLS certificate files', { err: String(e), certPath, keyPath });
+    process.exit(1);
+  }
+}
+
+const tlsOptions = loadTlsOptions();
 
 function normalizePeerIp(addr) {
   if (!addr || typeof addr !== 'string') return null;
@@ -298,7 +323,8 @@ function createPlainHttpHandler(wss, side) {
 
 function attachUpgradeServer(port, label, side) {
   const wss = new WebSocketServer({ noServer: true, maxPayload: WS_MAX_PAYLOAD_BYTES });
-  const server = http.createServer(createPlainHttpHandler(wss, side));
+  const handler = createPlainHttpHandler(wss, side);
+  const server = tlsOptions ? https.createServer(tlsOptions, handler) : http.createServer(handler);
 
   server.on('upgrade', (req, socket, head) => {
     if (shuttingDown) {
@@ -362,8 +388,9 @@ function attachUpgradeServer(port, label, side) {
 
   server.listen(port, LISTEN_ADDRESS, () => {
     const extra = EXPOSE_RELAY_PEERS ? ', /relay-peers' : '';
+    const proto = tlsOptions ? 'HTTPS/WSS' : 'HTTP/WS';
     log.info(
-      `Middleware: ${label} listening on ${LISTEN_ADDRESS}:${port} (GET /health${metricsEnabled() ? ', /metrics' : ''}${extra}, /ws legacy, /ws/<sessionKey> multiplex)`,
+      `Middleware: ${label} ${proto} on ${LISTEN_ADDRESS}:${port} (GET /health${metricsEnabled() ? ', /metrics' : ''}${extra}, /ws legacy, /ws/<sessionKey> multiplex)`,
     );
   });
 
