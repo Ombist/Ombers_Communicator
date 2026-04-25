@@ -36,6 +36,8 @@ const log = createLogger();
 
 const MACHINE_PORT = Number(process.env.MACHINE_PORT) || 8081;
 const PHONE_PORT = Number(process.env.PHONE_PORT) || 8080;
+/** Bind address for both HTTP listeners (`0.0.0.0` default). Use `127.0.0.1` when TLS terminates in Nginx on the same host. */
+const LISTEN_ADDRESS = String(process.env.LISTEN_ADDRESS || process.env.BIND_ADDRESS || '0.0.0.0').trim() || '0.0.0.0';
 const SHUTDOWN_TIMEOUT_MS = Number(process.env.SHUTDOWN_TIMEOUT_MS) || 10_000;
 
 const WS_MAX_PAYLOAD_BYTES =
@@ -358,10 +360,10 @@ function attachUpgradeServer(port, label, side) {
     });
   });
 
-  server.listen(port, '0.0.0.0', () => {
+  server.listen(port, LISTEN_ADDRESS, () => {
     const extra = EXPOSE_RELAY_PEERS ? ', /relay-peers' : '';
     log.info(
-      `Middleware: ${label} listening on 0.0.0.0:${port} (GET /health${metricsEnabled() ? ', /metrics' : ''}${extra}, /ws legacy, /ws/<sessionKey> multiplex)`,
+      `Middleware: ${label} listening on ${LISTEN_ADDRESS}:${port} (GET /health${metricsEnabled() ? ', /metrics' : ''}${extra}, /ws legacy, /ws/<sessionKey> multiplex)`,
     );
   });
 

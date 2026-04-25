@@ -78,6 +78,10 @@ npm run test-multipair
 - [docs/relay-internal-firewall.md](../docs/relay-internal-firewall.md)
 - Copy-paste **examples only** (`ufw` / `nft`): [docs/firewall-internal-examples.md](docs/firewall-internal-examples.md)
 
+## TLS / WSS in front of Ombers (Nginx)
+
+Ombers stays plain HTTP/WebSocket on loopback; Nginx terminates **TLS** so clients use **`wss://`** and **`https://`** on the relay ports. Step-by-step layout (dual TLS ports, internal `PHONE_PORT`/`MACHINE_PORT`, WebSocket `Upgrade` headers): [docs/nginx-wss-ingress.md](docs/nginx-wss-ingress.md). iOS **leaf pin** checklist and rotation pointers: [docs/ios-tls-pins-for-wss-ingress.md](docs/ios-tls-pins-for-wss-ingress.md).
+
 ## CI
 
 In the **Ombist** monorepo, GitHub Actions runs quality and security gates in `Ombers_Communicator/` when this directory changes (see `../.github/workflows/ombers-communicator.yml`):
@@ -95,6 +99,7 @@ If you publish **only** this folder as its own repository, copy that workflow to
 |-----|---------|-------------|
 | `MACHINE_PORT` | 8081 | Port for OpenClaw Machine connections |
 | `PHONE_PORT` | 8080 | Port for Phone connections |
+| `LISTEN_ADDRESS` or `BIND_ADDRESS` | `0.0.0.0` | TCP bind address for **both** listeners. Use `127.0.0.1` when only a local reverse proxy (e.g. Nginx) should reach Ombers; see [docs/nginx-wss-ingress.md](docs/nginx-wss-ingress.md) |
 | `SHUTDOWN_TIMEOUT_MS` | `10000` | Max time for graceful shutdown before `exit 1` |
 | `LOG_FORMAT` | _(unset)_ | Set to `json` for one JSON object per line (`ts`, `level`, `msg`, …) |
 | `ENABLE_METRICS` or `METRICS_ENABLED` | _(off)_ | Set to `1` or `true` to expose Prometheus text on `GET /metrics` |
