@@ -32,6 +32,33 @@
 - Ensure only expected routes are exposed publicly (`/ws`, `/health`), keep `/metrics` private/protected.
 - Validate source restrictions (security groups/firewall) for machine and phone ingress paths.
 
+## mTLS and client PKI (Nginx in front of Ombers)
+
+Monorepo prep playbook (PKI SOP, staging, Ombot env, iOS decision, cutover): [../../docs/relay-nginx-mtls-prep.md](../../docs/relay-nginx-mtls-prep.md).
+
+When **mutual TLS** is enabled on the ingress (`ssl_verify_client on`), synthetic checks and on-call playbooks must include a **client certificate**:
+
+- Document probe commands with `curl --cert/--key` (see [../nginx-mtls-ingress.md](../nginx-mtls-ingress.md#health-checks-and-monitoring)).
+- If probes hit Ombers **only** on loopback HTTP (`http://127.0.0.1:…/health`), that validates the Node process but **not** the public TLS+mTLS path — schedule periodic mTLS-capable checks.
+
+**Client CA lifecycle**
+
+- **Issuance:** Use one pipeline (Vault PKI, Smallstep, AD CS, etc.) for Ombot and iOS client identities; store issuing CA keys offline or in HSM per policy.
+- **Renewal:** Prefer short-lived client certs + automation over long-lived PEM files on disk.
+- **Revocation:** Define break-glass for compromised CA; for lost devices, revoke serial or block at a secondary layer (`IP_ALLOWLIST` is coarse — not a substitute for PKI revoke).
+
+**Rollout**
+
+- Start with `ssl_verify_client optional`, monitor failure rates, then switch to `on` on **both** phone and machine TLS ports together ([../nginx-mtls-ingress.md](../nginx-mtls-ingress.md#rollout-optional--on)).
+
+**Ombot**
+
+- Client cert paths for outbound middleware `wss://`: see monorepo [Ombot README](../../../Ombot/README.md) (`MIDDLEWARE_TLS_CLIENT_*`).
+
+**Ombist iOS**
+
+- Client identity for relay mTLS is documented in [../ios-client-mtls.md](../ios-client-mtls.md) (MDM vs in-app; not all flows may be implemented in-app yet).
+
 ## Ingress certificate rotation checklist (production)
 
 Automation should use ACME (Let’s Encrypt) or a **single** internal PKI pipeline—avoid hand-copied `fullchain.pem` on individual hosts.
@@ -52,6 +79,23 @@ echo | openssl s_client -servername "${RELAY_FQDN}" -connect "${RELAY_FQDN}:443"
 - **Before T−0**: Ensure the **next** leaf pin is already in the **signed pin manifest** and/or app defaults, alongside the current pin (dual-pin window ≥ policy in [docs/ios-pin-rotation-calendar.md](../../../docs/ios-pin-rotation-calendar.md)).
 - **T−0**: Switch ingress to present the new leaf; **do not** remove the old pin until the agreed window ends and client TLS/pin failure rates are unchanged vs baseline.
 - **T+window end**: Remove old pin from manifest/defaults; optionally retire old cert material from the proxy after confirmation.
+
+**Manifest generation quick path (self-signed/private CA)**
+
+```bash
+docs/tools/build-relay-pin-manifest.sh \
+  --leaf-cert ./relay.crt \
+  --next-pin <next_leaf_pin_optional> \
+  --valid-until 2027-12-31T23:59:59Z \
+  --version 3 \
+  --private-key ./pin-manifest-private.pem \
+  > relay-pin-manifest.json
+```
+
+Validate before publish: `node Ombifest/src/cli.js verify --manifest relay-pin-manifest.json --public-key-hex <OMBIST_PIN_MANIFEST_PUBLIC_KEY_HEX>` (from monorepo root).
+
+- Publish the generated JSON to your configured `OMBIST_PIN_MANIFEST_URL`.
+- Never rotate ingress leaf cert before publishing the next pin (dual-pin overlap).
 
 **Dry-run expiry alerting**
 

@@ -18,7 +18,8 @@ When Ombist iOS connects with **`wss://`** to a non-localhost relay host, produc
 
 3. **Deliver pins to clients**
 
-   - **Signed manifest** (recommended for rotation): [../../docs/ios-pin-rotation-calendar.md](../../docs/ios-pin-rotation-calendar.md), signing tool [../../docs/tools/sign-pin-manifest.mjs](../../docs/tools/sign-pin-manifest.mjs), `OMBIST_PIN_MANIFEST_URL` / `OMBIST_PIN_MANIFEST_PUBLIC_KEY_HEX` in the app Info.plist (or UserDefaults override for URL).
+   - **Signed manifest** (recommended for rotation): [../../docs/ios-pin-rotation-calendar.md](../../docs/ios-pin-rotation-calendar.md); sign and verify with **[Ombifest](../../Ombifest/README.md)** ([SPEC](../../Ombifest/SPEC.md)). Legacy entrypoint [../../docs/tools/sign-pin-manifest.mjs](../../docs/tools/sign-pin-manifest.mjs) forwards to the same CLI. Configure `OMBIST_PIN_MANIFEST_URL` / `OMBIST_PIN_MANIFEST_PUBLIC_KEY_HEX` in the app Info.plist (or UserDefaults override for URL).
+   - **Dual-pin helper**: [../../docs/tools/build-relay-pin-manifest.sh](../../docs/tools/build-relay-pin-manifest.sh) or `node ../../Ombifest/src/cli.js build-relay …` — produces a signed manifest from the current relay leaf cert plus optional next pin.
    - **UserDefaults / MDM**: `clawchat_pinned_cert_sha256` — comma-separated leaf pins (union with manifest).
 
 4. **Rotation without outage**  

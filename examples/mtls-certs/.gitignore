@@ -1,0 +1,2 @@
+# Generated lab certificates (see gencerts.sh)
+nginx/*.pem

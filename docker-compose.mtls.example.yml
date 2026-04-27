@@ -1,0 +1,33 @@
+# Example: Nginx terminates TLS + mTLS; Ombers listens on loopback only.
+# Copy and adjust paths/ports. Do not use in production without replacing certs and secrets.
+#
+#   docker compose -f docker-compose.mtls.example.yml up --build
+#
+# Prepare on the host (example layout):
+#   ./examples/mtls-certs/nginx/server-fullchain.pem
+#   ./examples/mtls-certs/nginx/server-privkey.pem
+#   ./examples/mtls-certs/nginx/client-ca-chain.pem   # CA that signed client certs
+#   ./examples/mtls-certs/nginx/ombers.conf           # derived from docs/nginx-mtls-ingress.md
+
+services:
+  ombers:
+    build: .
+    network_mode: service:nginx_edge
+    environment:
+      LISTEN_ADDRESS: 127.0.0.1
+      PHONE_PORT: 18080
+      MACHINE_PORT: 18081
+    # Ombers shares network namespace with nginx so 127.0.0.1 is local to the pair.
+    depends_on:
+      - nginx_edge
+
+  nginx_edge:
+    image: nginx:1.27-alpine
+    ports:
+      - "8443:8443"
+      - "8444:8444"
+    volumes:
+      - ./examples/mtls-certs/nginx/ombers.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./examples/mtls-certs/nginx/server-fullchain.pem:/etc/ssl/relay/fullchain.pem:ro
+      - ./examples/mtls-certs/nginx/server-privkey.pem:/etc/ssl/relay/privkey.pem:ro
+      - ./examples/mtls-certs/nginx/client-ca-chain.pem:/etc/ssl/relay/client-ca-chain.pem:ro

@@ -82,6 +82,10 @@ npm run test-multipair
 
 Ombers stays plain HTTP/WebSocket on loopback; Nginx terminates **TLS** so clients use **`wss://`** and **`https://`** on the relay ports. Step-by-step layout (dual TLS ports, internal `PHONE_PORT`/`MACHINE_PORT`, WebSocket `Upgrade` headers): [docs/nginx-wss-ingress.md](docs/nginx-wss-ingress.md). iOS **leaf pin** checklist and rotation pointers: [docs/ios-tls-pins-for-wss-ingress.md](docs/ios-tls-pins-for-wss-ingress.md).
 
+**Mutual TLS (mTLS)** at Nginx (client certs for phone/machine ingress, Ombers unchanged): [docs/nginx-mtls-ingress.md](docs/nginx-mtls-ingress.md). Ombist iOS client-cert notes: [docs/ios-client-mtls.md](docs/ios-client-mtls.md). Optional reference Compose: [docker-compose.mtls.example.yml](docker-compose.mtls.example.yml) (run [examples/mtls-certs/gencerts.sh](examples/mtls-certs/gencerts.sh) first for lab PEMs). Operator prep playbook (PKI, staging, Ombot env, iOS decision, prod cutover): [docs/relay-nginx-mtls-prep.md](../docs/relay-nginx-mtls-prep.md).
+
+When Nginx terminates TLS, set **`LISTEN_ADDRESS=127.0.0.1`** (or `BIND_ADDRESS`) and choose **internal** `PHONE_PORT`/`MACHINE_PORT` (e.g. `18080`/`18081`) that match Nginx `proxy_pass`; expose **only** the Nginx TLS ports (`P` and `P+1`) publicly. See [docs/nginx-mtls-ingress.md](docs/nginx-mtls-ingress.md#ombers-bind-address-and-internal-ports).
+
 ## CI
 
 In the **Ombist** monorepo, GitHub Actions runs quality and security gates in `Ombers_Communicator/` when this directory changes (see `../.github/workflows/ombers-communicator.yml`):
@@ -99,7 +103,7 @@ If you publish **only** this folder as its own repository, copy that workflow to
 |-----|---------|-------------|
 | `MACHINE_PORT` | 8081 | Port for OpenClaw Machine connections |
 | `PHONE_PORT` | 8080 | Port for Phone connections |
-| `LISTEN_ADDRESS` or `BIND_ADDRESS` | `0.0.0.0` | TCP bind address for **both** listeners. Use `127.0.0.1` when only a local reverse proxy (e.g. Nginx) should reach Ombers; see [docs/nginx-wss-ingress.md](docs/nginx-wss-ingress.md) |
+| `LISTEN_ADDRESS` or `BIND_ADDRESS` | `0.0.0.0` | TCP bind address for **both** listeners. Use **`127.0.0.1`** when Nginx (or another ingress) terminates TLS/mTLS on the host and proxies to Ombers; internal `PHONE_PORT`/`MACHINE_PORT` must match `proxy_pass` upstreams — see [docs/nginx-wss-ingress.md](docs/nginx-wss-ingress.md) and [docs/nginx-mtls-ingress.md](docs/nginx-mtls-ingress.md) |
 | `SHUTDOWN_TIMEOUT_MS` | `10000` | Max time for graceful shutdown before `exit 1` |
 | `LOG_FORMAT` | _(unset)_ | Set to `json` for one JSON object per line (`ts`, `level`, `msg`, …) |
 | `ENABLE_METRICS` or `METRICS_ENABLED` | _(off)_ | Set to `1` or `true` to expose Prometheus text on `GET /metrics` |

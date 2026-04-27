@@ -99,3 +99,4 @@ Use `wscat` or the iOS app to confirm WebSocket upgrade over TLS.
 - Ombers env and security: [../README.md](../README.md)
 - Firewall layers: [../../docs/relay-internal-firewall.md](../../docs/relay-internal-firewall.md)
 - iOS certificate pins when using `wss`: [ios-tls-pins-for-wss-ingress.md](./ios-tls-pins-for-wss-ingress.md)
+- **Mutual TLS (mTLS)** at Nginx: [nginx-mtls-ingress.md](./nginx-mtls-ingress.md)
